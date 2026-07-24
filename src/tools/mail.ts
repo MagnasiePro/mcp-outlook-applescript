@@ -1,6 +1,8 @@
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+import { assertSafeDownloadPath } from '../utils/paths.js';
+import { logAudit } from '../utils/audit.js';
 import type { IRepository } from '../database/repository.js';
 import type { Folder, EmailSummary, Email, AttachmentInfo, PaginatedResult } from '../types/index.js';
 import { paginate } from '../types/index.js';
@@ -317,7 +319,10 @@ export class MailTools {
         if (row == null) {
             throw new NotFoundError('Email', email_id);
         }
-        const dir = dirname(save_path);
+        // Confine the destination to the allowed download directory (blocks
+        // path traversal / writes to sensitive locations chosen by the model).
+        const safePath = assertSafeDownloadPath(save_path);
+        const dir = dirname(safePath);
         if (!existsSync(dir)) {
             throw new ValidationError(`Directory does not exist: ${dir}`);
         }
@@ -329,13 +334,14 @@ export class MailTools {
         if (attachment.size > MAX_ATTACHMENT_DOWNLOAD_SIZE) {
             throw new AttachmentTooLargeError(attachment.name, attachment.size, MAX_ATTACHMENT_DOWNLOAD_SIZE);
         }
-        const result = this.attachmentReader.saveAttachment(email_id, attachment_index, save_path);
+        const result = this.attachmentReader.saveAttachment(email_id, attachment_index, safePath);
         if (!result.success) {
             throw new AttachmentSaveError(attachment.name, result.error ?? 'Unknown error');
         }
+        logAudit('download_attachment', { emailId: email_id, attachmentIndex: attachment_index, savedTo: safePath, name: attachment.name });
         return {
             name: result.name ?? attachment.name,
-            savedTo: result.savedTo ?? save_path,
+            savedTo: result.savedTo ?? safePath,
             size: result.fileSize ?? attachment.size,
         };
     }

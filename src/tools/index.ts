@@ -125,3 +125,27 @@ export {
     RenameFolderInput,
     MoveFolderInput,
 } from './mailbox-organization.js';
+
+// Outgoing mail (two-phase send)
+export {
+    OutgoingMailTools,
+    createOutgoingMailTools,
+    PrepareSendEmailInput,
+    ConfirmSendEmailInput,
+    type ConfirmSendEmailParams,
+} from './outgoing-mail.js';
+
+// Calendar write approval (two-phase create/update/delete)
+export {
+    CalendarWriteApprovalTools,
+    createCalendarWriteApprovalTools,
+    PrepareCreateEventInput,
+    ConfirmCreateEventInput,
+    PrepareUpdateEventInput,
+    ConfirmUpdateEventInput,
+    PrepareDeleteEventInput,
+    ConfirmDeleteEventInput,
+    type ConfirmCreateEventParams,
+    type ConfirmUpdateEventParams,
+    type ConfirmDeleteEventParams,
+} from './calendar-write.js';

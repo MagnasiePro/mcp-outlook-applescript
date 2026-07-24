@@ -7,7 +7,7 @@ import { createCalendarTools } from './tools/calendar.js';
 import { createContactsTools } from './tools/contacts.js';
 import { createTasksTools } from './tools/tasks.js';
 import { createNotesTools } from './tools/notes.js';
-import { createMailboxOrganizationTools, ListAccountsInput, ListEmailsInput, SearchEmailsInput, GetEmailInput, GetUnreadCountInput, ListAttachmentsInput, DownloadAttachmentInput, ListCalendarsInput, ListEventsInput, GetEventInput, SearchEventsInput, CreateEventInput, RespondToEventInput, DeleteEventInput, UpdateEventInput, ListContactsInput, SearchContactsInput, GetContactInput, ListTasksInput, SearchTasksInput, GetTaskInput, ListNotesInput, GetNoteInput, SearchNotesInput, ListFoldersWithAccountInput, SendEmailInput, PrepareDeleteEmailInput, ConfirmDeleteEmailInput, PrepareMoveEmailInput, ConfirmMoveEmailInput, PrepareArchiveEmailInput, ConfirmArchiveEmailInput, PrepareJunkEmailInput, ConfirmJunkEmailInput, PrepareDeleteFolderInput, ConfirmDeleteFolderInput, PrepareEmptyFolderInput, ConfirmEmptyFolderInput, PrepareBatchDeleteEmailsInput, PrepareBatchMoveEmailsInput, ConfirmBatchOperationInput, MarkEmailReadInput, MarkEmailUnreadInput, SetEmailFlagInput, ClearEmailFlagInput, SetEmailCategoriesInput, CreateFolderInput, RenameFolderInput, MoveFolderInput, } from './tools/index.js';
+import { createMailboxOrganizationTools, ListAccountsInput, ListEmailsInput, SearchEmailsInput, GetEmailInput, GetUnreadCountInput, ListAttachmentsInput, DownloadAttachmentInput, ListCalendarsInput, ListEventsInput, GetEventInput, SearchEventsInput, RespondToEventInput, ListContactsInput, SearchContactsInput, GetContactInput, ListTasksInput, SearchTasksInput, GetTaskInput, ListNotesInput, GetNoteInput, SearchNotesInput, ListFoldersWithAccountInput, PrepareDeleteEmailInput, ConfirmDeleteEmailInput, PrepareMoveEmailInput, ConfirmMoveEmailInput, PrepareArchiveEmailInput, ConfirmArchiveEmailInput, PrepareJunkEmailInput, ConfirmJunkEmailInput, PrepareDeleteFolderInput, ConfirmDeleteFolderInput, PrepareEmptyFolderInput, ConfirmEmptyFolderInput, PrepareBatchDeleteEmailsInput, PrepareBatchMoveEmailsInput, ConfirmBatchOperationInput, MarkEmailReadInput, MarkEmailUnreadInput, SetEmailFlagInput, ClearEmailFlagInput, SetEmailCategoriesInput, CreateFolderInput, RenameFolderInput, MoveFolderInput, createOutgoingMailTools, PrepareSendEmailInput, ConfirmSendEmailInput, createCalendarWriteApprovalTools, PrepareCreateEventInput, ConfirmCreateEventInput, PrepareUpdateEventInput, ConfirmUpdateEventInput, PrepareDeleteEventInput, ConfirmDeleteEventInput, } from './tools/index.js';
 import { ApprovalTokenManager } from './approval/index.js';
 import { wrapError, OutlookNotRunningError, } from './utils/errors.js';
 // =============================================================================
@@ -39,6 +39,8 @@ export function createServer() {
     let calendarWriter = null;
     let calendarManager = null;
     let mailSender = null;
+    let outgoingMailTools = null;
+    let calendarWriteTools = null;
     function initializeAppleScriptBackend() {
         if (!isOutlookRunning()) {
             throw new OutlookNotRunningError();
@@ -55,6 +57,8 @@ export function createServer() {
         calendarWriter = createCalendarWriter();
         calendarManager = createCalendarManager();
         mailSender = createMailSender();
+        outgoingMailTools = createOutgoingMailTools(mailSender, tokenManager);
+        calendarWriteTools = createCalendarWriteApprovalTools(repository, calendarWriter, calendarManager, tokenManager);
         initialized = true;
     }
     function ensureInitialized() {
@@ -138,23 +142,15 @@ export function createServer() {
         return jsonResult(result);
     }));
     server.tool('search_events', 'Search calendar events by matching the query against event titles. Returns {items, count, hasMore} — increment offset by limit when hasMore is true. Use after/before (ISO 8601) to filter by event start date. For full event details including attendees, call get_event on a matching ID.', SearchEventsInput.shape, handle((args) => jsonResult(calendarTools.searchEvents(args))));
-    server.tool('create_event', 'Create a new calendar event in Outlook. Use this to schedule meetings or reminders. Returns the created event with id, title, start/end dates, calendar_id, and is_recurring flag. Optionally specify a target calendar_id (from list_calendars), location, description, all-day flag, or recurrence pattern. Returns an error if start_date is not before end_date or if the calendar is unavailable. Use delete_event to remove a created event.', CreateEventInput.shape, handle((args) => {
-        if (calendarWriter == null)
+    server.tool('prepare_create_event', 'Prepare to create a new calendar event (phase 1 of 2). Validates the event and returns a preview plus an approval token with expiration. Call confirm_create_event with the token to actually create it. Returns an error if start_date is not before end_date. The token expires after 5 minutes.', PrepareCreateEventInput.shape, handle((args) => {
+        if (calendarWriteTools == null)
             return errorResult('Event creation is not available');
-        const params = CreateEventInput.parse(args);
-        const writerParams = buildCalendarWriterParams(params);
-        const created = calendarWriter.createEvent(writerParams);
-        return jsonResult({
-            id: created.id,
-            title: params.title,
-            start_date: params.start_date,
-            end_date: params.end_date,
-            calendar_id: created.calendarId,
-            location: params.location ?? null,
-            description: params.description ?? null,
-            is_all_day: params.is_all_day,
-            is_recurring: params.recurrence != null,
-        });
+        return jsonResult(calendarWriteTools.prepareCreateEvent(PrepareCreateEventInput.parse(args)));
+    }));
+    server.tool('confirm_create_event', 'Confirm and create the calendar event prepared by prepare_create_event, using its approval token. Returns the created event with id, title, dates, and calendar_id. Returns an error if the token is invalid, expired, or already used.', ConfirmCreateEventInput.shape, handle((args) => {
+        if (calendarWriteTools == null)
+            return errorResult('Event creation is not available');
+        return jsonResult(calendarWriteTools.confirmCreateEvent(args));
     }));
     server.tool('respond_to_event', 'Respond to a meeting invitation with accept, decline, or tentative. Updates your RSVP status in Outlook and by default sends a response notification to the organizer (set send_response to false to suppress). Returns a confirmation message. Use get_event first to review the event details before responding. Returns an error if the event ID does not exist or event response is unavailable.', RespondToEventInput.shape, handle((args) => {
         if (calendarManager == null)
@@ -166,29 +162,25 @@ export function createServer() {
                 : 'tentatively accepted';
         return { content: [{ type: 'text', text: `Successfully ${responseText} event ${result.eventId}` }] };
     }));
-    server.tool('delete_event', 'Delete a calendar event from Outlook. For recurring events, use apply_to to choose between deleting a single instance or the entire series. Returns a confirmation message. This action is permanent and cannot be undone. Returns an error if the event ID does not exist. Use get_event to verify the event before deleting.', DeleteEventInput.shape, handle((args) => {
-        if (calendarManager == null)
+    server.tool('prepare_delete_event', 'Prepare to delete a calendar event (phase 1 of 2). Returns a preview and an approval token. For recurring events, use apply_to to choose a single instance or the entire series. Call confirm_delete_event with the token to execute. This action is permanent. Returns an error if the event ID does not exist. The token expires after 5 minutes.', PrepareDeleteEventInput.shape, handle((args) => {
+        if (calendarWriteTools == null)
             return errorResult('Event deletion is not available');
-        const params = DeleteEventInput.parse(args);
-        calendarManager.deleteEvent(params.event_id, params.apply_to);
-        const deleteText = params.apply_to === 'all_in_series' ? ' (entire series)' : '';
-        return { content: [{ type: 'text', text: `Successfully deleted event ${params.event_id}${deleteText}` }] };
+        return jsonResult(calendarWriteTools.prepareDeleteEvent(PrepareDeleteEventInput.parse(args)));
     }));
-    server.tool('update_event', 'Update a calendar event in Outlook. Only the fields you specify will be changed — omitted fields remain unchanged. For recurring events, use apply_to to choose between updating a single instance or the entire series. Returns a confirmation with the event ID and list of updated field names. Returns an error if the event ID does not exist or start_date is not before end_date. Use get_event to review current values before updating.', UpdateEventInput.shape, handle((args) => {
-        if (calendarManager == null)
+    server.tool('confirm_delete_event', 'Confirm and delete the calendar event prepared by prepare_delete_event, using its approval token. Permanently deletes the event. Returns an error if the token is invalid, expired, already used, or if the event changed since the prepare step.', ConfirmDeleteEventInput.shape, handle((args) => {
+        if (calendarWriteTools == null)
+            return errorResult('Event deletion is not available');
+        return jsonResult(calendarWriteTools.confirmDeleteEvent(args));
+    }));
+    server.tool('prepare_update_event', 'Prepare to update a calendar event (phase 1 of 2). Only the fields you specify will change. Returns the fields to be updated and an approval token. For recurring events, use apply_to. Call confirm_update_event with the token to execute. Returns an error if the event ID does not exist or start_date is not before end_date. The token expires after 5 minutes.', PrepareUpdateEventInput.shape, handle((args) => {
+        if (calendarWriteTools == null)
             return errorResult('Event update is not available');
-        const params = UpdateEventInput.parse(args);
-        const updates = {
-            ...(params.title != null && { title: params.title }),
-            ...(params.start_date != null && { startDate: params.start_date }),
-            ...(params.end_date != null && { endDate: params.end_date }),
-            ...(params.location != null && { location: params.location }),
-            ...(params.description != null && { description: params.description }),
-            ...(params.is_all_day != null && { isAllDay: params.is_all_day }),
-        };
-        const result = calendarManager.updateEvent(params.event_id, updates, params.apply_to);
-        const updateText = params.apply_to === 'all_in_series' ? ' (entire series)' : '';
-        return { content: [{ type: 'text', text: `Successfully updated event ${result.id}${updateText}. Updated fields: ${result.updatedFields.join(', ')}` }] };
+        return jsonResult(calendarWriteTools.prepareUpdateEvent(PrepareUpdateEventInput.parse(args)));
+    }));
+    server.tool('confirm_update_event', 'Confirm and apply the calendar event update prepared by prepare_update_event, using its approval token. Returns the event ID and list of updated field names. Returns an error if the token is invalid, expired, already used, or if the event changed since the prepare step.', ConfirmUpdateEventInput.shape, handle((args) => {
+        if (calendarWriteTools == null)
+            return errorResult('Event update is not available');
+        return jsonResult(calendarWriteTools.confirmUpdateEvent(args));
     }));
     // =========================================================================
     // Contact Tools
@@ -226,33 +218,15 @@ export function createServer() {
     // =========================================================================
     // Send Email
     // =========================================================================
-    server.tool('send_email', 'Send an email from Outlook with optional CC, BCC, file attachments, inline images, and HTML formatting. This action sends the email immediately and cannot be undone. Returns the sent message_id and sent_at timestamp. Use list_accounts to find account_id if sending from a non-default account. Returns an error if required fields (to, subject) are missing or if attachment file paths do not exist.', SendEmailInput.shape, handle((args) => {
-        if (mailSender == null)
+    server.tool('prepare_send_email', 'Prepare to send an email (phase 1 of 2). Validates recipients, body, and attachment paths, returns a preview of the message and a single-use approval token with expiration. Call confirm_send_email with the token to actually send. Nothing is sent by this tool. Attachment paths pointing at sensitive files are rejected. The token expires after 5 minutes.', PrepareSendEmailInput.shape, handle((args) => {
+        if (outgoingMailTools == null)
             return errorResult('Email sending is not available');
-        const params = SendEmailInput.parse(args);
-        const sendParams = {
-            to: params.to,
-            subject: params.subject,
-            body: params.body,
-            bodyType: params.body_type,
-            ...(params.cc != null && { cc: params.cc }),
-            ...(params.bcc != null && { bcc: params.bcc }),
-            ...(params.reply_to != null && { replyTo: params.reply_to }),
-            ...(params.attachments != null && { attachments: params.attachments }),
-            ...(params.inline_images != null && {
-                inlineImages: params.inline_images.map(img => ({
-                    path: img.path,
-                    contentId: img.content_id,
-                })),
-            }),
-            ...(params.account_id != null && { accountId: params.account_id }),
-        };
-        const sent = mailSender.sendEmail(sendParams);
-        return jsonResult({
-            message_id: sent.messageId,
-            sent_at: sent.sentAt,
-            status: 'sent',
-        });
+        return jsonResult(outgoingMailTools.prepareSendEmail(PrepareSendEmailInput.parse(args)));
+    }));
+    server.tool('confirm_send_email', 'Confirm and send the email prepared by prepare_send_email, using its approval token. This sends the exact message that was previewed and cannot be undone. Returns the sent message_id and sent_at timestamp. Returns an error if the token is invalid, expired, or already used.', ConfirmSendEmailInput.shape, handle((args) => {
+        if (outgoingMailTools == null)
+            return errorResult('Email sending is not available');
+        return jsonResult(outgoingMailTools.confirmSendEmail(args));
     }));
     // =========================================================================
     // Mailbox Organization Tools (Destructive — Two-Phase)
@@ -288,33 +262,6 @@ export function createServer() {
 // =============================================================================
 // Helpers
 // =============================================================================
-/** Maps Zod-validated CreateEventInput fields to the CalendarWriter's internal param shape. */
-function buildCalendarWriterParams(params) {
-    let recurrence;
-    if (params.recurrence != null) {
-        const rec = params.recurrence;
-        recurrence = {
-            frequency: rec.frequency,
-            interval: rec.interval,
-            ...(rec.days_of_week != null && { daysOfWeek: rec.days_of_week }),
-            ...(rec.day_of_month != null && { dayOfMonth: rec.day_of_month }),
-            ...(rec.week_of_month != null && { weekOfMonth: rec.week_of_month }),
-            ...(rec.day_of_week_monthly != null && { dayOfWeekMonthly: rec.day_of_week_monthly }),
-            ...(rec.end.type === 'end_date' && { endDate: rec.end.date }),
-            ...(rec.end.type === 'end_after_count' && { endAfterCount: rec.end.count }),
-        };
-    }
-    return {
-        title: params.title,
-        startDate: params.start_date,
-        endDate: params.end_date,
-        ...(params.calendar_id != null && { calendarId: params.calendar_id }),
-        ...(params.location != null && { location: params.location }),
-        ...(params.description != null && { description: params.description }),
-        ...(params.is_all_day != null && { isAllDay: params.is_all_day }),
-        ...(recurrence != null && { recurrence }),
-    };
-}
 function resolveAccountIds(accountId, accountRepository) {
     if (accountId === undefined) {
         const defaultId = accountRepository.getDefaultAccountId();

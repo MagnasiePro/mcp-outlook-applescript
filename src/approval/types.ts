@@ -1,8 +1,17 @@
-/** Destructive mailbox operations that require two-phase approval. */
-export type OperationType = 'delete_email' | 'move_email' | 'archive_email' | 'junk_email' | 'delete_folder' | 'empty_folder' | 'batch_delete_emails' | 'batch_move_emails';
+/** Sensitive operations (destructive or outbound) that require two-phase approval. */
+export type OperationType =
+    | 'delete_email' | 'move_email' | 'archive_email' | 'junk_email'
+    | 'delete_folder' | 'empty_folder' | 'batch_delete_emails' | 'batch_move_emails'
+    | 'send_email'
+    | 'create_event' | 'update_event' | 'delete_event';
 
-/** Resource categories that approval tokens can target. */
-export type TargetType = 'email' | 'folder';
+/**
+ * Resource categories that approval tokens can target.
+ * `outgoing` covers actions with no pre-existing entity (send an email,
+ * create an event) — the token is bound to a hash of the intended payload
+ * rather than to a stored record.
+ */
+export type TargetType = 'email' | 'folder' | 'event' | 'outgoing';
 
 /** Time-limited, single-use authorization for one destructive operation on one target. */
 export interface ApprovalToken {
