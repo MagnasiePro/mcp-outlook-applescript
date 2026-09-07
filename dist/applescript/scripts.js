@@ -55,6 +55,31 @@ export const DELIMITERS = {
     EQUALS: '{{=}}',
     NULL: '{{NULL}}',
 };
+/**
+ * AppleScript handler that neutralizes the delimiter tokens inside a value.
+ *
+ * All delimiters start with `{{`, so replacing `{{` with `{ {` in any value
+ * read from Outlook (subjects, bodies, sender names, etc.) prevents a crafted
+ * email/contact/event from injecting or spoofing records/fields when the
+ * delimiter-formatted output is parsed. Prepend to any script that emits
+ * attacker-controlled content and wrap values with `my sanitizeField(...)`.
+ */
+export const SANITIZE_HANDLER = `on sanitizeField(theValue)
+  set theText to ""
+  try
+    set theText to theValue as string
+  on error
+    return theValue
+  end try
+  set savedTID to AppleScript's text item delimiters
+  set AppleScript's text item delimiters to "{{"
+  set theItems to text items of theText
+  set AppleScript's text item delimiters to "{ {"
+  set theText to theItems as text
+  set AppleScript's text item delimiters to savedTID
+  return theText
+end sanitizeField
+`;
 // =============================================================================
 // Shared AppleScript Output Templates
 // =============================================================================
@@ -82,9 +107,9 @@ const PREVIEW_EXTRACT_BLOCK = `      set mPreview to ""
       try
         set rawContent to plain text content of m
         if (count of rawContent) > 500 then
-          set mPreview to text 1 thru 500 of rawContent
+          set mPreview to my sanitizeField(text 1 thru 500 of rawContent)
         else
-          set mPreview to rawContent
+          set mPreview to my sanitizeField(rawContent)
         end if
       end try`;
 // =============================================================================
@@ -146,6 +171,7 @@ export function listMessages(folderId, limit, offset, unreadOnly, after, before)
   set endIdx to count of allMsgs`;
     }
     return `
+${SANITIZE_HANDLER}
 tell application "Microsoft Outlook"
   set output to ""
   set targetFolder to mail folder id ${folderId}
@@ -157,14 +183,14 @@ ${dateVarBlock}${fetchBlock}
     try
       set m to item i of allMsgs
       set mId to id of m
-      set mSubject to subject of m
+      set mSubject to my sanitizeField(subject of m)
       set mSender to ""
       try
-        set mSender to address of sender of m
+        set mSender to my sanitizeField(address of sender of m)
       end try
       set mSenderName to ""
       try
-        set mSenderName to name of sender of m
+        set mSenderName to my sanitizeField(name of sender of m)
       end try
       set mDate to ""
       try
@@ -250,6 +276,7 @@ export function searchMessages(query, folderId, limit, offset = 0, after, before
     const phase2DateCheckEnd = hasDateFilter ? `
           end if` : '';
     return `
+${SANITIZE_HANDLER}
 tell application "Microsoft Outlook"
   set output to ""
   set resultCount to 0
@@ -270,14 +297,14 @@ ${dateVarBlock}
       try
         set m to item i of subjectMatches
         set mId to id of m
-        set mSubject to subject of m
+        set mSubject to my sanitizeField(subject of m)
         set mSender to ""
         try
-          set mSender to address of sender of m
+          set mSender to my sanitizeField(address of sender of m)
         end try
         set mSenderName to ""
         try
-          set mSenderName to name of sender of m
+          set mSenderName to my sanitizeField(name of sender of m)
         end try
         set mDate to ""
         try
@@ -320,16 +347,16 @@ ${FLAG_STATUS_BLOCK}
         set mId to id of m
         set mSender to ""
         try
-          set mSender to address of sender of m
+          set mSender to my sanitizeField(address of sender of m)
         end try
         if mSender contains "${escapedQuery}" then${phase2DateCheck}
           if phase2Skipped < phase2Skip then
             set phase2Skipped to phase2Skipped + 1
           else
-            set mSubject to subject of m
+            set mSubject to my sanitizeField(subject of m)
             set mSenderName to ""
             try
-              set mSenderName to name of sender of m
+              set mSenderName to my sanitizeField(name of sender of m)
             end try
             set mDate to ""
             try
@@ -355,17 +382,18 @@ end tell
  */
 export function getMessage(messageId) {
     return `
+${SANITIZE_HANDLER}
 tell application "Microsoft Outlook"
   set m to message id ${messageId}
   set mId to id of m
-  set mSubject to subject of m
+  set mSubject to my sanitizeField(subject of m)
   set mSender to ""
   try
-    set mSender to address of sender of m
+    set mSender to my sanitizeField(address of sender of m)
   end try
   set mSenderName to ""
   try
-    set mSenderName to name of sender of m
+    set mSenderName to my sanitizeField(name of sender of m)
   end try
   set mDateReceived to ""
   try
@@ -387,11 +415,11 @@ tell application "Microsoft Outlook"
   end try
   set mHtml to ""
   try
-    set mHtml to content of m
+    set mHtml to my sanitizeField(content of m)
   end try
   set mPlain to ""
   try
-    set mPlain to plain text content of m
+    set mPlain to my sanitizeField(plain text content of m)
   end try
   set mHasHtml to has html of m
   set mFolderId to ""
@@ -403,13 +431,13 @@ tell application "Microsoft Outlook"
   set toList to ""
   try
     repeat with r in to recipients of m
-      set toList to toList & (address of r) & ","
+      set toList to toList & my sanitizeField(address of r) & ","
     end repeat
   end try
   set ccList to ""
   try
     repeat with r in cc recipients of m
-      set ccList to ccList & (address of r) & ","
+      set ccList to ccList & my sanitizeField(address of r) & ","
     end repeat
   end try
 
@@ -419,7 +447,7 @@ tell application "Microsoft Outlook"
   try
     set idx to 1
     repeat with a in attachments of m
-      set aName to name of a
+      set aName to my sanitizeField(name of a)
       set attachList to attachList & aName & ","
       set aSize to 0
       try
@@ -601,10 +629,11 @@ end tell
  */
 export function getEvent(eventId) {
     return `
+${SANITIZE_HANDLER}
 tell application "Microsoft Outlook"
   set e to calendar event id ${eventId}
   set eId to id of e
-  set eSubject to subject of e
+  set eSubject to my sanitizeField(subject of e)
   set eStart to ""
   try
     set eStart to start time of e as «class isot» as string
@@ -615,21 +644,21 @@ tell application "Microsoft Outlook"
   end try
   set eLocation to ""
   try
-    set eLocation to location of e
+    set eLocation to my sanitizeField(location of e)
   end try
   set eContent to ""
   try
-    set eContent to content of e
+    set eContent to my sanitizeField(content of e)
   end try
   set ePlain to ""
   try
-    set ePlain to plain text content of e
+    set ePlain to my sanitizeField(plain text content of e)
   end try
   set eAllDay to all day flag of e
   set eRecurring to is recurring of e
   set eOrganizer to ""
   try
-    set eOrganizer to organizer of e
+    set eOrganizer to my sanitizeField(organizer of e)
   end try
   set eCalId to ""
   try
@@ -640,8 +669,8 @@ tell application "Microsoft Outlook"
   set attendeeList to ""
   try
     repeat with a in attendees of e
-      set aEmail to email address of a
-      set aName to name of a
+      set aEmail to my sanitizeField(email address of a)
+      set aName to my sanitizeField(name of a)
       set attendeeList to attendeeList & aEmail & "|" & aName & ","
     end repeat
   end try
@@ -1028,41 +1057,42 @@ end tell
  */
 export function getContact(contactId) {
     return `
+${SANITIZE_HANDLER}
 tell application "Microsoft Outlook"
   set c to contact id ${contactId}
   set cId to id of c
-  set cDisplay to display name of c
+  set cDisplay to my sanitizeField(display name of c)
   set cFirst to ""
   try
-    set cFirst to first name of c
+    set cFirst to my sanitizeField(first name of c)
   end try
   set cLast to ""
   try
-    set cLast to last name of c
+    set cLast to my sanitizeField(last name of c)
   end try
   set cMiddle to ""
   try
-    set cMiddle to middle name of c
+    set cMiddle to my sanitizeField(middle name of c)
   end try
   set cNickname to ""
   try
-    set cNickname to nickname of c
+    set cNickname to my sanitizeField(nickname of c)
   end try
   set cCompany to ""
   try
-    set cCompany to company of c
+    set cCompany to my sanitizeField(company of c)
   end try
   set cTitle to ""
   try
-    set cTitle to job title of c
+    set cTitle to my sanitizeField(job title of c)
   end try
   set cDept to ""
   try
-    set cDept to department of c
+    set cDept to my sanitizeField(department of c)
   end try
   set cNotes to ""
   try
-    set cNotes to description of c
+    set cNotes to my sanitizeField(description of c)
   end try
 
   -- Phones
@@ -1083,7 +1113,7 @@ tell application "Microsoft Outlook"
   set emailList to ""
   try
     repeat with e in email addresses of c
-      set emailList to emailList & (address of e) & ","
+      set emailList to emailList & my sanitizeField(address of e) & ","
     end repeat
   end try
 
@@ -1197,17 +1227,18 @@ end tell
  */
 export function getTask(taskId) {
     return `
+${SANITIZE_HANDLER}
 tell application "Microsoft Outlook"
   set t to task id ${taskId}
   set tId to id of t
-  set tName to name of t
+  set tName to my sanitizeField(name of t)
   set tContent to ""
   try
-    set tContent to content of t
+    set tContent to my sanitizeField(content of t)
   end try
   set tPlain to ""
   try
-    set tPlain to plain text content of t
+    set tPlain to my sanitizeField(plain text content of t)
   end try
   set tDue to ""
   try
@@ -1332,17 +1363,18 @@ end tell
  */
 export function getNote(noteId) {
     return `
+${SANITIZE_HANDLER}
 tell application "Microsoft Outlook"
   set n to note id ${noteId}
   set nId to id of n
-  set nName to name of n
+  set nName to my sanitizeField(name of n)
   set nContent to ""
   try
-    set nContent to content of n
+    set nContent to my sanitizeField(content of n)
   end try
   set nPlain to ""
   try
-    set nPlain to plain text content of n
+    set nPlain to my sanitizeField(plain text content of n)
   end try
   set nCreated to ""
   try

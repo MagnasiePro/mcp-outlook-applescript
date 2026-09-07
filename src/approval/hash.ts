@@ -30,3 +30,53 @@ export function hashFolderForApproval(folder: {
         .digest('hex')
         .slice(0, 16);
 }
+
+/**
+ * Produces a truncated SHA-256 fingerprint of an outgoing-email payload.
+ * Binds a send-email approval token to the exact message the model asked to
+ * send, so the confirmed message cannot differ from the previewed one.
+ */
+export function hashSendPayloadForApproval(payload: {
+    to: readonly string[];
+    subject: string;
+    body: string;
+    bodyType: string;
+    cc?: readonly string[];
+    bcc?: readonly string[];
+    replyTo?: string;
+    attachments?: readonly { path: string; name?: string }[];
+    inlineImages?: readonly { path: string; contentId: string }[];
+    accountId?: number;
+}): string {
+    const canonical = JSON.stringify({
+        to: payload.to,
+        cc: payload.cc ?? [],
+        bcc: payload.bcc ?? [],
+        subject: payload.subject,
+        body: payload.body,
+        bodyType: payload.bodyType,
+        replyTo: payload.replyTo ?? '',
+        attachments: (payload.attachments ?? []).map((a) => [a.path, a.name ?? '']),
+        inlineImages: (payload.inlineImages ?? []).map((i) => [i.path, i.contentId]),
+        accountId: payload.accountId ?? 0,
+    });
+    return createHash('sha256').update(canonical).digest('hex').slice(0, 16);
+}
+
+/**
+ * Produces a truncated SHA-256 fingerprint of a calendar event's key
+ * properties. Used to detect modifications between the prepare and confirm
+ * steps for update/delete. Only fields available on the DB `EventRow` are
+ * used (there is no subject at that layer).
+ */
+export function hashEventForApproval(event: {
+    id: number;
+    startDate: number | null;
+    endDate: number | null;
+    uid: string | null;
+}): string {
+    return createHash('sha256')
+        .update(`${event.id}:${event.startDate ?? 0}:${event.endDate ?? 0}:${event.uid ?? ''}`)
+        .digest('hex')
+        .slice(0, 16);
+}

@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { executeAppleScriptOrThrow } from './executor.js';
 import * as scripts from './scripts.js';
 import { parseSendEmailResult } from './parser.js';
+import { assertSafeAttachmentPath } from '../utils/paths.js';
 import { AppleScriptError, AttachmentNotFoundError, MailSendError } from '../utils/errors.js';
 
 /** A file attachment identified by its filesystem path and optional display name. */
@@ -55,6 +56,9 @@ export class AppleScriptMailSender implements IMailSender {
     sendEmail(params: MailSenderParams): SentEmail {
         if (params.attachments != null) {
             for (const attachment of params.attachments) {
+                // Defense in depth: reject sensitive-file exfiltration even if
+                // the tool layer's check was bypassed.
+                assertSafeAttachmentPath(attachment.path);
                 if (!existsSync(attachment.path)) {
                     throw new AttachmentNotFoundError(attachment.path);
                 }
@@ -62,6 +66,7 @@ export class AppleScriptMailSender implements IMailSender {
         }
         if (params.inlineImages != null) {
             for (const image of params.inlineImages) {
+                assertSafeAttachmentPath(image.path);
                 if (!existsSync(image.path)) {
                     throw new AttachmentNotFoundError(image.path);
                 }

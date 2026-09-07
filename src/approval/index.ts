@@ -6,5 +6,5 @@ export {
     type ValidationErrorReason,
     type ValidationResult,
 } from './types.js';
-export { hashEmailForApproval, hashFolderForApproval } from './hash.js';
+export { hashEmailForApproval, hashFolderForApproval, hashSendPayloadForApproval, hashEventForApproval } from './hash.js';
 export { ApprovalTokenManager } from './token-manager.js';

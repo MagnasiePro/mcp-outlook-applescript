@@ -13,6 +13,7 @@ import {
     NotFoundError,
 } from '../utils/errors.js';
 import { appleTimestampToIso } from '../utils/dates.js';
+import { logAudit } from '../utils/audit.js';
 
 // =============================================================================
 // Input Schemas — Destructive Operations (Two-Phase)
@@ -403,6 +404,7 @@ export class MailboxOrganizationTools {
         repoAction: (id: number) => void, successMessage: string) {
         this.consumeAndVerifyEmail(tokenId, operation, emailId);
         repoAction(emailId);
+        logAudit(operation, { emailId });
         return { success: true as const, message: successMessage };
     }
 
@@ -411,6 +413,7 @@ export class MailboxOrganizationTools {
         repoAction: (id: number) => void, successMessage: string) {
         this.consumeAndVerifyFolder(tokenId, operation, folderId);
         repoAction(folderId);
+        logAudit(operation, { folderId });
         return { success: true as const, message: successMessage };
     }
 
@@ -423,6 +426,7 @@ export class MailboxOrganizationTools {
         const token = this.consumeAndVerifyEmail(params.token_id, 'move_email', params.email_id);
         const destFolderId = (token.metadata as Record<string, unknown>)['destinationFolderId'] as number;
         this.repository.moveEmail(params.email_id, destFolderId);
+        logAudit('move_email', { emailId: params.email_id, destinationFolderId: destFolderId });
         return { success: true as const, message: 'Email moved successfully.' };
     }
 
@@ -470,10 +474,12 @@ export class MailboxOrganizationTools {
                 const token = this.consumeAndVerifyEmail(token_id, operation, email_id);
                 if (operation === 'batch_delete_emails') {
                     this.repository.deleteEmail(email_id);
+                    logAudit('batch_delete_emails', { emailId: email_id });
                 }
                 else {
                     const destFolderId = (token.metadata as Record<string, unknown>)['destinationFolderId'] as number;
                     this.repository.moveEmail(email_id, destFolderId);
+                    logAudit('batch_move_emails', { emailId: email_id, destinationFolderId: destFolderId });
                 }
                 results.push({ email_id, success: true });
             }
